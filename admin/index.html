@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hugo 在线发布后台</title>
+  <style>
+    :root {
+      --bg-primary: #0f0f0f;
+      --bg-secondary: #1a1a1a;
+      --bg-tertiary: #252525;
+      --text-primary: #e0e0e0;
+      --text-secondary: #a0a0a0;
+      --accent: #ff6b35;
+      --accent-hover: #ff8555;
+      --border: #333;
+      --success: #4ade80;
+      --error: #f87171;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg-primary); color: var(--text-primary); line-height: 1.6; }
+    .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+    header { padding: 40px 0 20px; border-bottom: 1px solid var(--border); margin-bottom: 30px; display: flex; justify-content: space-between; align-items: center; }
+    h1 { font-size: 1.5rem; color: var(--accent); }
+    .form-grid { display: grid; grid-template-columns: 1fr 280px; gap: 20px; }
+    @media (max-width: 800px) { .form-grid { grid-template-columns: 1fr; } }
+    .main-content, .panel { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+    .form-group { margin-bottom: 15px; }
+    label { display: block; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 5px; }
+    input[type="text"], select, textarea { width: 100%; padding: 10px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); outline: none; }
+    textarea { min-height: 300px; font-family: monospace; }
+    .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; transition: 0.2s; font-weight: 500; }
+    .btn-primary { background: var(--accent); color: white; }
+    .btn-primary:hover { background: var(--accent-hover); }
+    .tags-input { display: flex; flex-wrap: wrap; gap: 5px; padding: 5px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; }
+    .tag { background: var(--accent); color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; display: flex; align-items: center; gap: 5px; }
+    .tag-remove { cursor: pointer; }
+    .tag-input { border: none; background: transparent; color: white; outline: none; padding: 5px; flex: 1; }
+    .toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 20px; border-radius: 6px; color: white; transform: translateY(100px); transition: 0.3s; }
+    .toast.show { transform: translateY(0); }
+    .toast.success { background: var(--success); }
+    .toast.error { background: var(--error); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <h1>✍️ 发布文章</h1>
+        <p style="color: var(--text-secondary); font-size: 0.8rem;">Hugo Blog Online Publisher</p>
+      </div>
+      <div>
+        <button class="btn" onclick="openDrafts()">📂 草稿箱</button>
+      </div>
+    </header>
+
+    <div class="form-grid">
+      <div class="main-content">
+        <div class="form-group">
+          <label>文章标题</label>
+          <input type="text" id="title" placeholder="输入标题...">
+        </div>
+        <div class="form-group">
+          <label>正文内容 (Markdown)</label>
+          <textarea id="content" placeholder="开始写作..."></textarea>
+        </div>
+        <div style="text-align: right;">
+          <button class="btn btn-primary" id="publishBtn" onclick="publish()">🚀 发布文章</button>
+        </div>
+      </div>
+
+      <div class="sidebar">
+        <div class="panel">
+          <div class="form-group">
+            <label>分类</label>
+            <select id="category">
+              <option value="技术">技术</option>
+              <option value="生活">生活</option>
+              <option value="随笔">随笔</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>标签 (回车添加)</label>
+            <div class="tags-input" id="tagsContainer">
+              <input type="text" class="tag-input" id="tagInput" onkeydown="handleTag(event)">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>自定义链接 (Slug)</label>
+            <input type="text" id="slug" placeholder="可选...">
+          </div>
+        </div>
+        <p style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 10px; text-align: center;">
+          Powered by Cloudflare Worker & GitHub API
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <script>
+    const CONFIG = {
+      API_BASE: 'https://your-worker-subdomain.workers.dev' // 修改为你的 Worker 地址
+    };
+
+    let tags = [];
+
+    function handleTag(e) {
+      if (e.key === 'Enter') {
+        const val = e.target.value.trim();
+        if (val && !tags.includes(val)) {
+          tags.push(val);
+          renderTags();
+        }
+        e.target.value = '';
+      }
+    }
+
+    function renderTags() {
+      const container = document.getElementById('tagsContainer');
+      const input = document.getElementById('tagInput');
+      container.querySelectorAll('.tag').forEach(t => t.remove());
+      tags.forEach((tag, i) => {
+        const span = document.createElement('span');
+        span.className = 'tag';
+        span.innerHTML = `${tag} <span class="tag-remove" onclick="removeTag(${i})">×</span>`;
+        container.insertBefore(span, input);
+      });
+    }
+
+    function removeTag(i) {
+      tags.splice(i, 1);
+      renderTags();
+    }
+
+    async function publish() {
+      const title = document.getElementById('title').value;
+      const content = document.getElementById('content').value;
+      if (!title || !content) return showToast('标题和内容不能为空', 'error');
+
+      const btn = document.getElementById('publishBtn');
+      btn.disabled = true;
+      btn.innerText = '正在发布...';
+
+      try {
+        const res = await fetch(`${CONFIG.API_BASE}/publish`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            title, content, category: document.getElementById('category').value,
+            slug: document.getElementById('slug').value, tags
+          })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('发布成功！', 'success');
+        } else {
+          showToast('错误: ' + (data.error || '发布失败'), 'error');
+        }
+      } catch (e) {
+        showToast('网络错误', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.innerText = '🚀 发布文章';
+      }
+    }
+
+    function showToast(msg, type) {
+      const t = document.getElementById('toast');
+      t.innerText = msg;
+      t.className = `toast show ${type}`;
+      setTimeout(() => t.classList.remove('show'), 3000);
+    }
+  </script>
+</body>
+</html>
