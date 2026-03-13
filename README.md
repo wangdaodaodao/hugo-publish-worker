@@ -1,85 +1,66 @@
 # Hugo Publish Worker
 
-> **像使用 WordPress 一样写静态博客，却能享受 100% 的静态性能。**
+基于 Cloudflare Workers 和 GitHub API 实现的静态博客在线发布工具。
 
-`hugo-publish-worker` 是一个专为 **Hugo**（及其他静态博客）设计的“全自动在线发布后台”。它利用 Cloudflare 的边缘计算能力，彻底解决了静态博客“发布难、同步难、传图难”的三大终极痛点。
+## 项目背景
 
----
+静态博客通常依赖本地 Hugo 编译环境和 Git 命令行操作。本项目通过 Web 端界面管理 Markdown 文件和元数据。
 
-## ⚡ 彻底解决静态博客的“陈年旧疾”
+- **操作逻辑**：通过浏览器访问管理页，直接编辑内容并推送至 GitHub。无需本地环境。
+- **成本数据**：利用 Cloudflare 免费额度。服务器运营费用为 0 元。
+- **存储方案**：
+    - 文章正文：提交至 GitHub。
+    - 临时草稿：存入 Cloudflare D1 SQL 数据库。
+    - 媒体文件：存入 Cloudflare R2 对象存储。
 
-静态博客虽好，但这些痛点你一定深有体会：
-- **发布门槛高**：每次发文都要“三板斧”（本地新建 -> 写文 -> Git 提交）。在公司或网吧想改个错别字？对不起，你得先装个 Hugo 环境。
-- **多设备无法同步**：灵感来了想在手机写一段？回家后发现文件在公司的电脑里，没有 Git 仓库你寸步难行。
-- **图片处理是噩梦**：手动压缩图片、手动重命名、手动放到 `static/images`，最后还得在 Markdown 里手打又长又臭的路径。
-- **没有“草稿箱”**：写了一半关掉浏览器？内容就没了。存在 Git 里又会产生大量无意义的“WIP”提交记录。
+## 核心功能说明
 
-**本项目就是为了终结这一切。**
+### 1. 内容同步 (Cloudflare D1)
+- **物理状态**：多设备（手机、平板、PC）之间缺乏统一的本地存储空间。
+- **解决方案**：引入 D1 数据库作为中转。每间隔 30 秒将当前编辑器内容写入边缘数据库。
+- **结果**：多浏览器访问时可自动读取最近一次保存的草稿。
 
----
+### 2. 媒体处理 (Cloudflare R2)
+- **物理事实**：图片属于二进制文件，直接存入 Git 仓库会导致 `.git` 文件夹体积由于历史记录累积而迅速膨胀。
+- **操作流程**：
+    1. 图片上传至 R2 存储桶。
+    2. 系统自动计算文件 SHA-1 哈希值并作为文件名。
+    3. 按照 `年/月/文件名` 物理路径归档。
+- **自动化**：上传后自动在光标处插入公网 URL 或自定义短代码。
 
-## 🚀 为什么选择它？核心优势
+### 3. 序号计算逻辑
+- **机制**：通过 GitHub API 扫描 `content/posts/` 目录下的 `.md` 文件。
+- **量化结果**：识别最大数字前缀，自动加 1 生成新文件名。例如：现有 `38-post.md`，自动生成 `39-new-post.md`。
 
-### 1. 彻底摆脱环境依赖 (无需本地电脑)
-有了这个发布页，你只需要一个浏览器。无论是手机、平板还是公共电脑，随时随地打开网页即写即发。**无需安装 Hugo，无需配置 Git，无需打开 VSCode。**
+## 技术规格
 
-### 2. 真·免服务器 (零成本托管)
-- **底层架构**：基于 Cloudflare Workers + D1 + R2，全部运行在 Cloudflare 的边缘节点。
-- **费用**：完全利用 Cloudflare 的免费额度，**0 元** 拥有一套专业级的 CMS 管理后台。
+- **Runtime**: Cloudflare Workers
+- **Database**: Cloudflare D1
+- **Object Storage**: Cloudflare R2
+- **Authentication**: JWT Cookie
+- **Protocol**: GitHub REST API v3
 
-### 3. 多端完美同步 (D1 数据库加持)
-- **优势**：引入 D1 数据库作为“灵感中转站”。你在手机上写到一半，回家打开电脑浏览器，草稿会自动出现在列表中。
-- **价值**：D1 负责存放不适合进 Git 的“临时状态”，而最终发布的文章才进入 GitHub，保持仓库的绝对整洁。
+## 部署说明
 
-### 4. 图片一键上传 (R2 媒体剥离)
-- **体验**：支持 **拖拽上传**。Worker 会自动对图片进行 SHA-1 命名（防重复）、按月归档并上传到 R2。
-- **自动化**：上传成功后自动在光标位置插入你的博客对应的短代码。**不再需要 Git 存储二进制图片**，极大减小仓库体积。
+### 1. 后端配置
+- 准备一个具有 `repo` 权限的 GitHub Personal Access Token。
+- 将 `wrangler.toml.example` 重命名为 `wrangler.toml`。
+- 设置环境变量：
+    - `GITHUB_TOKEN`: 认证令牌。
+    - `JWT_SECRET`: 32 位以上字符串。
+    - `GITHUB_OWNER`: GitHub ID。
+    - `GITHUB_REPO`: 仓库名。
 
-### 5. 发布“双保险”系统
-- **特性**：文章推送到 GitHub 后，D1 里的草稿 **默认不删除**。
-- **原因**：万一 GitHub Actions 构建失败了，你还能从草稿箱里瞬间找回。由你手动确认效果没问题后，再自行清理草稿。
+### 2. 数据库与存储绑定
+```bash
+# 创建 D1 数据库
+npx wrangler d1 create <name>
+# 在 wrangler.toml 中绑定 ID
+```
 
----
+### 3. 前端部署
+- 修改 `admin/index.html` 中的 `API_BASE` 指向 Worker 域名。
+- 将 `admin` 目录复制到 Hugo 仓库的 `static/` 路径。
 
-## 🌟 功能特性
-
-- 🔐 **JWT 安全访问**：通过简单且安全的密码系统，确保发布页只有你本人能进。
-- 📱 **响应式写作界面**：针对移动端优化，左侧编辑，右侧配置，支持预览。
-- 🔢 **智能文件名生成**：自动扫描 GitHub 仓库，计算当前最大文章序号并自动递增（如 `39-my-post.md`）。
-- 🔌 **低侵入性设计**：它只是一个“安全网关”。它不要求你修改任何 Hugo 原有逻辑，只需把前端文件丢进 `static/` 即可。
-
----
-
-## 🛠 技术实现
-
-- **Runtime**: [Cloudflare Workers](https://workers.cloudflare.com/) (无服务器计算)
-- **Storage**: [GitHub API](https://docs.github.com/en/rest) (内容持久化)
-- **Database**: [Cloudflare D1](https://developers.cloudflare.com/d1/) (多端同步草稿箱)
-- **Object Storage**: [Cloudflare R2](https://developers.cloudflare.com/r2/) (解耦 Git 与多媒体文件)
-
----
-
-## 🚀 3 分钟快速部署
-
-1. **克隆项目**：
-   ```bash
-   git clone https://github.com/wangdaodaodao/hugo-publish-worker.git
-   ```
-2. **修改配置**：
-   将 `wrangler.toml.example` 重命名并填入你的 `GITHUB_OWNER` 和 `GITHUB_REPO`。
-3. **部署后端**：
-   `npx wrangler deploy`
-4. **设置密钥**：
-   在 CF 控制台填入 `GITHUB_TOKEN` 和随机生成的 `JWT_SECRET`。
-5. **部署前端**：
-   修改 `admin/index.html` 中的 `API_BASE`，然后将整个目录扔进你 Hugo 的 `static/` 目录下。
-
----
-
-## 📝 许可证
-
-MIT License.
-
----
-
-如果你也厌倦了静态博客那繁琐的发布流程，欢迎尝试并给个 **Star 🌟**！架构上有任何建议也欢迎提 Issue。
+## 许可证
+MIT.
